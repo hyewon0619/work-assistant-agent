@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>애니</title>
+<style>
+:root{--bg:#f5f6f8;--panel:#fff;--line:#e3e6ea;--text:#1d2430;--muted:#6b7480;--accent:#2563eb;--warn:#b45309;--warnbg:#fff7e6;--info:#1e40af;--infobg:#eef4ff}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;background:var(--bg);color:var(--text);font-size:14px}
+header{display:flex;align-items:center;gap:12px;padding:12px 20px;background:var(--panel);border-bottom:1px solid var(--line)}
+header h1{font-size:16px;margin:0}
+header .sp{flex:1}
+select,button,input,textarea{font:inherit}
+button{border:1px solid var(--line);background:var(--panel);border-radius:6px;padding:6px 10px;cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+main{max-width:860px;margin:0 auto;padding:16px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:12px}
+.card h2{font-size:14px;margin:0 0 10px}
+.brief{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:6px;margin:4px 0;cursor:pointer}
+.brief.info{background:var(--infobg);color:var(--info)}
+.brief.warn{background:var(--warnbg);color:var(--warn)}
+.brief small{margin-left:auto;opacity:.7}
+#log{min-height:240px}
+.msg{margin:10px 0;line-height:1.6;white-space:pre-wrap}
+.msg.user{text-align:right}
+.msg.user span{display:inline-block;background:var(--accent);color:#fff;padding:7px 12px;border-radius:12px 12px 2px 12px;max-width:80%;text-align:left}
+.msg.bot span{display:inline-block;background:#f0f2f5;padding:8px 12px;border-radius:12px 12px 12px 2px;max-width:85%}
+.stage{font-size:12px;color:var(--muted);margin:2px 0 6px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+.chips button{font-size:13px}
+.proposal{border:1px dashed var(--accent);border-radius:8px;padding:8px 10px;margin:6px 0;display:flex;gap:8px;align-items:center}
+.proposal .t{flex:1}
+.proposal.done{border-style:solid;opacity:.7}
+.src a{font-size:12px;color:var(--accent);margin-right:8px;cursor:pointer}
+form{display:flex;gap:8px}
+form textarea{flex:1;resize:none;height:44px;border:1px solid var(--line);border-radius:8px;padding:10px}
+#mic.on{background:#fee2e2;border-color:#ef4444}
+dialog{border:1px solid var(--line);border-radius:10px;max-width:420px}
+dl{display:grid;grid-template-columns:90px 1fr;gap:4px 10px;margin:0}
+dt{color:var(--muted)}
+</style>
+</head>
+<body>
+<header>
+  <h1>애니 · 업무 비서</h1>
+  <span class="sp"></span>
+  <select id="user"></select>
+  <button id="newChat">새 대화</button>
+</header>
+<main>
+  <section class="card" id="briefCard">
+    <h2>오늘 먼저 챙길 것</h2>
+    <div id="brief"></div>
+  </section>
+  <section class="card">
+    <div id="log"></div>
+    <form id="form">
+      <button type="button" id="mic" title="음성 입력">🎤</button>
+      <textarea id="q" placeholder="예: 박민수 사건 다음 기일 언제야? / 이번 주 내 일정 알려줘"></textarea>
+      <button class="primary">보내기</button>
+    </form>
+  </section>
+</main>
+<dialog id="caseDlg"><dl id="caseBody"></dl><p><button onclick="caseDlg.close()">닫기</button></p></dialog>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let token = null, sessionId = null, history = [], screenCaseId = null, lastQuestion = "";
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {...opts, headers: {"Content-Type": "application/json", "Authorization": `Bearer ${token}`, ...(opts.headers || {})}});
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+  return res;
+}
+
+async function login(empId) {
+  const res = await fetch("/api/login", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({emp_id: empId})});
+  token = (await res.json()).token;
+  resetChat();
+  loadBriefing();
+}
+
+async function loadBriefing() {
+  const {items} = await (await api("/api/briefing")).json();
+  $("brief").innerHTML = items.length ? "" : "<div class='stage'>지금 챙길 항목이 없습니다.</div>";
+  for (const it of items) {
+    const row = document.createElement("div");
+    row.className = `brief ${it.level}`;
+    row.innerHTML = it.action ? `<span></span><small>물어보기 →</small>` : `<span></span>`;
+    row.firstChild.textContent = it.text;
+    if (it.action) row.onclick = () => { screenCaseId = it.case_id; send(it.action); };
+    else row.style.cursor = "default";
+    $("brief").append(row);
+  }
+}
+
+function resetChat() { sessionId = null; history = []; screenCaseId = null; $("log").innerHTML = ""; }
+
+function bubble(role, text) {
+  const div = document.createElement("div");
+  div.className = `msg ${role}`;
+  div.innerHTML = "<span></span>";
+  div.firstChild.textContent = text;
+  $("log").append(div);
+  return div;
+}
+
+async function send(question) {
+  if (!question.trim()) return;
+  lastQuestion = question;
+  bubble("user", question);
+  const wrap = document.createElement("div");
+  const stage = document.createElement("div"); stage.className = "stage"; stage.textContent = "생각 중…";
+  const answer = bubble("bot", "");
+  wrap.append(stage); $("log").append(wrap, answer);
+  const span = answer.firstChild;
+
+  const res = await api("/api/ask", {method: "POST", body: JSON.stringify({question, session_id: sessionId, history, screen_case_id: screenCaseId})});
+  const reader = res.body.getReader(), dec = new TextDecoder();
+  let buf = "", done = null;
+  while (true) {
+    const {value, done: end} = await reader.read();
+    if (end) break;
+    buf += dec.decode(value, {stream: true});
+    let i;
+    while ((i = buf.indexOf("\n\n")) >= 0) {
+      const line = buf.slice(0, i); buf = buf.slice(i + 2);
+      if (!line.startsWith("data:")) continue;
+      const ev = JSON.parse(line.slice(5));
+      if (ev.type === "token") span.textContent += ev.text;
+      else if (ev.type === "reset") span.textContent = "";
+      else if (ev.stage === "session") sessionId = ev.session_id;
+      else if (ev.stage === "plan") stage.textContent = ev.retry ? "조회해서 다시 확인하는 중…" : "생각 중…";
+      else if (ev.stage === "tool") stage.textContent = `조회 중: ${ev.names.join(", ")}`;
+      else if (ev.stage === "answer") stage.textContent = "";
+      else if (ev.stage === "error") { stage.textContent = ""; span.textContent = ev.message; }
+      else if (ev.stage === "done") done = ev;
+    }
+  }
+  if (!done) return;
+  span.textContent = done.answer;
+  history.push({question, answer: done.answer});
+  renderExtras(answer, done);
+}
+
+function renderExtras(after, ev) {
+  const box = document.createElement("div");
+  if (ev.choices) {
+    const chips = document.createElement("div"); chips.className = "chips";
+    for (const o of ev.choices.options) {
+      const b = document.createElement("button"); b.textContent = o.label;
+      b.onclick = () => {
+        if (ev.choices.type === "case") { screenCaseId = o.id; send(lastQuestion); }
+        else send(`처분권자는 ${o.label}(ID ${o.id})로 할게`);
+      };
+      chips.append(b);
+    }
+    box.append(chips);
+  }
+  for (const p of ev.proposals || []) {
+    const card = document.createElement("div"); card.className = "proposal";
+    card.innerHTML = `<span class="t"></span><button class="primary">반영</button><button>취소</button>`;
+    card.querySelector(".t").textContent = p.preview;
+    const [ok, no] = card.querySelectorAll("button");
+    ok.onclick = async () => { await api(`/api/proposals/${p.proposal_id}/apply`, {method: "POST"}); card.classList.add("done"); card.querySelector(".t").textContent += " · 반영됨"; ok.remove(); no.remove(); loadBriefing(); };
+    no.onclick = async () => { await api(`/api/proposals/${p.proposal_id}/discard`, {method: "POST"}); card.remove(); };
+    box.append(card);
+  }
+  if ((ev.sources || []).length) {
+    const src = document.createElement("div"); src.className = "src";
+    for (const s of ev.sources) {
+      const a = document.createElement("a"); a.textContent = `↗ ${s.title}`;
+      a.onclick = () => showCase(s.case_id);
+      src.append(a);
+    }
+    box.append(src);
+  }
+  after.after(box);
+}
+
+async function showCase(id) {
+  const c = await (await api(`/api/cases/${id}`)).json();
+  const rows = [["의뢰인", c.client_name], ["사건", c.title], ["유형", c.category], ["상태", c.status], ["사건번호", c.court_no], ["수임일", c.opened_at], ["계약 금액", c.contract_amount?.toLocaleString() + "원"]];
+  $("caseBody").innerHTML = "";
+  for (const [k, v] of rows) { const dt = document.createElement("dt"), dd = document.createElement("dd"); dt.textContent = k; dd.textContent = v ?? "-"; $("caseBody").append(dt, dd); }
+  screenCaseId = id;
+  $("caseDlg").showModal();
+}
+
+// 음성 입력: 브라우저 받아쓰기(Web Speech API). 녹음 파일 STT 는 사내 STT 서버를 재사용했다.
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (SR) {
+  const rec = new SR(); rec.lang = "ko-KR"; rec.interimResults = true;
+  rec.onresult = (e) => { $("q").value = [...e.results].map(r => r[0].transcript).join(""); };
+  rec.onend = () => $("mic").classList.remove("on");
+  $("mic").onclick = () => { $("mic").classList.add("on"); rec.start(); };
+} else { $("mic").disabled = true; $("mic").title = "이 브라우저는 음성 입력을 지원하지 않습니다"; }
+
+$("form").onsubmit = (e) => { e.preventDefault(); const q = $("q").value; $("q").value = ""; send(q); };
+$("q").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("form").requestSubmit(); } };
+$("newChat").onclick = resetChat;
+$("user").onchange = (e) => login(e.target.value);
+
+(async () => {
+  const users = await (await fetch("/api/demo/users")).json();
+  for (const u of users) $("user").add(new Option(`${u.name} (${u.title}·${u.branch})`, u.emp_id));
+  login(users[0].emp_id);
+})();
+</script>
+</body>
+</html>
