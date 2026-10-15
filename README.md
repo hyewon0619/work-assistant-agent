@@ -180,3 +180,7 @@ frontend/index.html      채팅 · 브리핑 · 제안 카드 · 음성 입력
 ## 라이선스
 
 MIT
+
+
+## 시연
+<img width="1060" height="728" alt="Image" src="https://github.com/user-attachments/assets/40ba1ef8-8fbe-43c5-bf44-213b72885f21" />
