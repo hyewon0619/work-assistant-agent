@@ -184,3 +184,4 @@ MIT
 
 ## 시연
 <img width="1060" height="728" alt="Image" src="https://github.com/user-attachments/assets/40ba1ef8-8fbe-43c5-bf44-213b72885f21" />
+<img width="508" height="615" alt="Image" src="https://github.com/user-attachments/assets/ad5323f0-966c-431d-883d-43b7e60f1087" />
